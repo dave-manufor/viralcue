@@ -1,0 +1,45 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalDependencies": [".env", ".env.local", "**/.env.*local"],
+  "globalEnv": [
+    "NODE_ENV",
+    "AWS_REGION",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "DATABASE_URL",
+    "CLERK_SECRET_KEY",
+    "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY",
+    "NEXT_PUBLIC_CLERK_SIGN_IN_URL",
+    "NEXT_PUBLIC_CLERK_SIGN_UP_URL",
+    "NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL",
+    "NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL",
+    "TWITCH_CLIENT_ID",
+    "TWITCH_CLIENT_SECRET",
+    "TWITCH_REDIRECT_URI",
+    "DEEPGRAM_API_KEY",
+    "STRIPE_SECRET_KEY",
+    "STRIPE_WEBHOOK_SECRET",
+    "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY",
+    "NEXT_PUBLIC_API_URL",
+    "NEXT_PUBLIC_WS_URL"
+  ],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": [".next/**", "!.next/cache/**", "dist/**"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "lint": {
+      "dependsOn": ["^build"]
+    },
+    "test": {
+      "dependsOn": ["^build"]
+    },
+    "clean": {
+      "cache": false
+    }
+  }
+}

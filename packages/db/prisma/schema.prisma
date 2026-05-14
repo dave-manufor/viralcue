@@ -1,0 +1,351 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================
+// SUBSCRIPTION PLANS
+// ============================================
+
+model SubscriptionPlan {
+  id                    String    @id @default(uuid())
+  name                  String    @unique  // "free", "starter", "pro", "agency"
+  displayName           String    @map("display_name")  // "Free", "Starter", "Pro", "Agency"
+  
+  // Retention settings
+  draftRetentionHours   Int       @default(24) @map("draft_retention_hours")
+  
+  // Future fields (scaffold for subscription management)
+  monthlyPriceUsd       Decimal?  @map("monthly_price_usd") @db.Decimal(10, 2)
+  yearlyPriceUsd        Decimal?  @map("yearly_price_usd") @db.Decimal(10, 2)
+  streamingHoursLimit   Decimal?  @map("streaming_hours_limit") @db.Decimal(10, 2)
+  maxDraftsPerStream    Int?      @map("max_drafts_per_stream")
+  
+  // Timestamps
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+  
+  // Relations
+  users                 User[]
+  
+  @@map("subscription_plans")
+}
+
+// ============================================
+// USERS & AUTHENTICATION
+// ============================================
+
+model User {
+  id                   String    @id @default(uuid())
+  
+  // Auth provider (Clerk) - separate for portability
+  authProviderId       String?   @unique @map("auth_provider_id")  // Clerk user ID
+  authProvider         String?   @map("auth_provider")             // "clerk", future: "auth0", etc.
+  
+  // Profile
+  email                String?   @unique
+  username             String?   @map("username")
+  avatarUrl            String?   @map("avatar_url")
+  
+  // Platform connections (legacy direct fields, prefer PlatformConnection)
+  twitchId             String?   @unique @map("twitch_id")
+  twitchUsername       String?   @map("twitch_username")
+  twitterId            String?   @map("twitter_id")
+  twitterUsername      String?   @map("twitter_username")
+  
+  // Stripe
+  stripeCustomerId     String?   @unique @map("stripe_customer_id")
+  
+  // Subscription (linked to plan table)
+  subscriptionPlanId   String?   @map("subscription_plan_id")
+  subscriptionPlan     SubscriptionPlan? @relation(fields: [subscriptionPlanId], references: [id])
+  subscriptionStatus   SubscriptionStatus @default(INACTIVE) @map("subscription_status")
+  streamingHoursUsed   Decimal   @default(0) @map("streaming_hours_used") @db.Decimal(10, 2)
+  billingCycleStart    DateTime? @map("billing_cycle_start")
+  
+
+  // Timestamps
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+  
+  // Relations
+  sessions             StreamingSession[]
+  affiliateLinks       AffiliateLink[]
+  connections          Connection[]
+  settings             UserSettings?
+  
+  @@map("users")
+}
+
+// ============================================
+// CONNECTIONS (OAuth tokens)
+// ============================================
+
+model Connection {
+  id               String   @id @default(uuid())
+  userId           String   @map("user_id")
+  provider         Platforms
+  platformUserId   String   @map("platform_user_id")
+  platformUsername String   @map("platform_username")
+  
+  // OAuth tokens (encrypt at rest in production)
+  accessToken      String   @map("access_token")
+  refreshToken     String?  @map("refresh_token")
+  scopes           String[] @default([])
+  expiresAt        DateTime @map("expires_at")
+  
+  // Timestamps
+  connectedAt      DateTime @default(now()) @map("connected_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+  
+  // Relations
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, provider])
+  @@unique([provider, platformUserId])
+  @@map("connections")
+}
+
+enum Platforms {
+  TWITCH
+  YOUTUBE
+  KICK
+  INSTAGRAM
+  TIKTOK
+  TWITTER
+  THREADS
+}
+
+enum SubscriptionStatus {
+  INACTIVE
+  ACTIVE
+  PAST_DUE
+  CANCELED
+}
+
+// ============================================
+// STREAMING SESSIONS
+// ============================================
+
+model StreamingSession {
+  id              String    @id @default(uuid())
+  userId          String    @map("user_id")
+  platform        Platform
+  platformStreamId String?  @map("platform_stream_id")
+  channelName     String?   @map("channel_name")
+  streamTitle     String?   @map("stream_title")
+  
+  startedAt       DateTime  @default(now()) @map("started_at")
+  endedAt         DateTime? @map("ended_at")
+  totalMinutes    Decimal?  @map("total_minutes") @db.Decimal(10, 2)
+  
+  draftsGenerated Int       @default(0) @map("drafts_generated")
+  draftsApproved  Int       @default(0) @map("drafts_approved")
+  draftsRejected  Int       @default(0) @map("drafts_rejected")
+  
+  // Stream URL for link injection
+  streamUrl       String?   @map("stream_url")
+  
+  // Relations
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  drafts          Draft[]
+  
+  // Indexes for efficient queries
+  @@index([endedAt])
+  @@index([userId, endedAt])
+  @@map("streaming_sessions")
+}
+
+// Streaming Platforms only (as requested)
+enum Platform {
+  TWITCH
+  YOUTUBE
+  KICK
+}
+
+// Social / Publishing Platforms
+enum SocialPlatform {
+  INSTAGRAM
+  TIKTOK
+  TWITTER
+  THREADS
+  YOUTUBE_SHORTS
+}
+
+// ============================================
+// DRAFTS (Generated Content)
+// ============================================
+
+model Draft {
+  id              String      @id @default(uuid())
+  sessionId       String      @map("session_id")
+  
+  draftType       DraftType   @map("draft_type")
+  content         String
+  confidenceScore Decimal?    @map("confidence_score") @db.Decimal(3, 2)
+  status          DraftStatus @default(PENDING)
+  
+  // Affiliate data (if applicable)
+  affiliateLinkId String?     @map("affiliate_link_id")
+  
+  // Transcript context
+  transcriptSnippet String?   @map("transcript_snippet")
+  videoUrl          String?   @map("video_url")
+  
+  // Timestamps
+  createdAt       DateTime    @default(now()) @map("created_at")
+  actionedAt      DateTime?   @map("actioned_at")
+  postedAt        DateTime?   @map("posted_at")
+  
+  // Relations
+  session         StreamingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  affiliateLink   AffiliateLink?   @relation(fields: [affiliateLinkId], references: [id])
+  
+  @@map("drafts")
+}
+
+enum DraftType {
+  THREAD
+  SHORT_VIDEO
+  // Legacy/Chat types
+  CHAT_MESSAGE
+  AFFILIATE
+  TWEET // Keeping for backward compatibility during migration if needed, but intended to be replaced by THREAD
+}
+
+enum DraftStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  POSTED
+  EXPIRED
+}
+
+// ============================================
+// AFFILIATE LINKS
+// ============================================
+
+model AffiliateLink {
+  id              String    @id @default(uuid())
+  userId          String    @map("user_id")
+  
+  productName     String    @map("product_name")
+  keywords        String[]  // Array of trigger keywords
+  affiliateUrl    String    @map("affiliate_url")
+  platform        String?   // 'amazon', 'shopify', 'gumroad', etc.
+  commissionRate  Decimal?  @map("commission_rate") @db.Decimal(5, 2)
+  
+  isActive        Boolean   @default(true) @map("is_active")
+  clickCount      Int       @default(0) @map("click_count")
+  
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  
+  // Relations
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  drafts          Draft[]
+  
+  @@map("affiliate_links")
+}
+
+// ============================================
+// USER SETTINGS & CONTEXT
+// ============================================
+
+model UserSettings {
+  id                       String    @id @default(uuid())
+  userId                   String    @unique @map("user_id")
+  
+  // Publishing Preferences (migrated from User)
+  includeStreamLinkInPosts Boolean   @default(true) @map("include_stream_link_in_posts")
+  autoSendAffiliateLinks   Boolean   @default(true) @map("auto_send_affiliate_links")
+  
+  // Channel Selection Preferences (per content type)
+  enabledTextChannels      String[]  @default(["twitter", "threads"]) @map("enabled_text_channels")
+  enabledVideoChannels     String[]  @default(["instagram", "tiktok", "youtube"]) @map("enabled_video_channels")
+  
+  // Onboarding State
+  contextPromptDismissed   Boolean   @default(false) @map("context_prompt_dismissed")
+  
+  // Timestamps
+  createdAt                DateTime  @default(now()) @map("created_at")
+  updatedAt                DateTime  @updatedAt @map("updated_at")
+  
+  // Relations
+  user                     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contextVersions          UserContextVersion[]
+  
+  @@map("user_settings")
+}
+
+model UserContextVersion {
+  id                   String          @id @default(uuid())
+  settingsId           String          @map("settings_id")
+  version              Int             @default(1)
+  isActive             Boolean         @default(true) @map("is_active")
+  
+  // Structured Context Fields
+  contentCategory      ContentCategory @default(OTHER) @map("content_category")
+  contentCategoryOther String?         @map("content_category_other")
+  
+  // Tone & Style (predefined options)
+  tonePresets          TonePreset[]    @default([]) @map("tone_presets")
+  
+  // Free-form Context
+  channelDescription   String?         @map("channel_description")
+  targetAudience       String?         @map("target_audience")
+  avoidTopics          String[]        @default([]) @map("avoid_topics")
+
+  
+  // Timestamps
+  createdAt            DateTime        @default(now()) @map("created_at")
+  
+  // Relations
+  settings             UserSettings    @relation(fields: [settingsId], references: [id], onDelete: Cascade)
+  
+  @@unique([settingsId, version])
+  @@index([settingsId, isActive])
+  @@map("user_context_versions")
+}
+
+enum ContentCategory {
+  GAMING
+  IRL
+  MUSIC
+  ART
+  JUST_CHATTING
+  SPORTS
+  EDUCATION
+  OTHER
+}
+
+enum TonePreset {
+  FUNNY
+  PROFESSIONAL
+  CASUAL
+  EDGY
+  WHOLESOME
+  HYPE
+  CHILL
+  SARCASTIC
+}
+
+// ============================================
+// ANALYTICS (Internal product metrics)
+// ============================================
+
+model AnalyticsEvent {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  eventType String   @map("event_type")  // "context_created", "context_preview", "draft_approved", etc.
+  metadata  Json?    @default("{}")       // Flexible event-specific data
+  createdAt DateTime @default(now()) @map("created_at")
+  
+  @@index([userId])
+  @@index([eventType])
+  @@index([createdAt])
+  @@map("analytics_events")
+}

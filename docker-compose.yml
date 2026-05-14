@@ -1,0 +1,371 @@
+version: "3.8"
+
+# GCP Emulator-based local development environment for ViralCue
+# Replaces AWS LocalStack with native GCP emulators
+
+services:
+  # ============================================
+  # DATABASES
+  # ============================================
+
+  # PostgreSQL - Cloud SQL compatible
+  postgres:
+    image: postgres:15-alpine
+    container_name: viralcue-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: viralcue
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis - Memorystore compatible
+  redis:
+    image: redis:7-alpine
+    container_name: viralcue-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # GCP EMULATORS
+  # ============================================
+
+  # Pub/Sub Emulator
+  pubsub-emulator:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
+    platform: linux/amd64 # Emulators often need x86 emulation on M1/M2 but let's try google-cloud-cli:emulators which handles it better or explicit platform
+    container_name: viralcue-pubsub
+    command: >
+      gcloud beta emulators pubsub start 
+      --host-port=0.0.0.0:8085
+      --project=viralcue-local
+    ports:
+      - "8085:8085"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8085"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # Firestore Emulator
+  firestore-emulator:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
+    platform: linux/amd64
+    container_name: viralcue-firestore
+    command: >
+      gcloud emulators firestore start 
+      --host-port=0.0.0.0:8086
+      --project=viralcue-local
+    ports:
+      - "8086:8086"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8086"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # Fake GCS Server
+  gcs-emulator:
+    image: fsouza/fake-gcs-server:latest
+    container_name: viralcue-gcs
+    ports:
+      - "4443:4443"
+    command:
+      [
+        "-scheme",
+        "http",
+        "-port",
+        "4443",
+        "-external-url",
+        "http://localhost:4443",
+      ]
+    volumes:
+      - gcs_data:/data
+    healthcheck:
+      test:
+        ["CMD", "wget", "-q", "-O", "-", "http://localhost:4443/storage/v1/b"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # INFRASTRUCTURE INITIALIZER
+  # ============================================
+
+  init-gcp:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
+    platform: linux/amd64
+    container_name: viralcue-init-gcp
+    depends_on:
+      pubsub-emulator:
+        condition: service_healthy
+      gcs-emulator:
+        condition: service_healthy
+    environment:
+      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
+      - STORAGE_EMULATOR_HOST=http://gcs-emulator:4443
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID}
+    entrypoint: ["/bin/bash", "-c"]
+
+    command:
+      - |
+        set -e
+        echo "=== ViralCue Infrastructure Initializer (Emulator) ==="
+
+        create_resource() {
+          local url="$$1"
+          local data="$$2"
+          local name="$$3"
+          local type="$$4"
+          
+          if [ -z "$$data" ]; then
+            response=$$(curl -s -w "%{http_code}" -X PUT "$$url")
+          else
+            response=$$(curl -s -w "%{http_code}" -X PUT "$$url" -H "Content-Type: application/json" -d "$$data")
+          fi
+          
+          # Extract HTTP status code (last 3 chars)
+          http_code=$${response: -3}
+          
+          if [ "$$http_code" == "200" ] || [ "$$http_code" == "409" ]; then
+            echo "  $$type $$name: Ready ($$http_code)"
+          else
+            echo "  ❌ Failed to create $$type $$name. Status: $$http_code"
+            # Print body for debugging
+            echo "  Response: $${response::-3}"
+            exit 1
+          fi
+        }
+
+        # Create Pub/Sub topics
+        echo "Creating Pub/Sub topics..."
+        topics=(
+          "viralcue-transcripts"
+          "viralcue-clip-downloaded"
+          "viralcue-drafts"
+          "draft-approved"
+          "viralcue-chat-messages"
+          "viralcue-transcripts-dlq"
+          "viralcue-viral-candidates"
+          "viralcue-clips-ready"
+        )
+
+        for topic in "$${topics[@]}"; do
+          create_resource "http://pubsub-emulator:8085/v1/projects/$${GCP_PROJECT_ID}/topics/$$topic" "" "$$topic" "Topic"
+        done
+
+        # Create subscriptions
+        echo "Creating subscriptions..."
+        # Format: topic:subscription
+        subscriptions=(
+          "viralcue-transcripts:ai-engine-sub"
+          "viralcue-clip-downloaded:director-sub"
+          "viralcue-drafts:dashboard-sub"
+          "viralcue-chat-messages:chat-sender-sub"
+          "viralcue-viral-candidates:clip-fetcher-sub"
+        )
+
+        for sub_pair in "$${subscriptions[@]}"; do
+          topic="$${sub_pair%%:*}"
+          sub="$${sub_pair##*:}"
+          body="{\"topic\": \"projects/$${GCP_PROJECT_ID}/topics/$$topic\"}"
+          create_resource "http://pubsub-emulator:8085/v1/projects/$${GCP_PROJECT_ID}/subscriptions/$$sub" "$$body" "$$sub" "Subscription"
+        done
+
+        # Create Push Subscription for Publisher Webhook
+        echo "Creating Push Subscription for Publisher Webhook..."
+        push_config="{\"topic\": \"projects/$${GCP_PROJECT_ID}/topics/draft-approved\", \"pushConfig\": {\"pushEndpoint\": \"http://viralcue-publisher:8080\"}}"
+        create_resource "http://pubsub-emulator:8085/v1/projects/$${GCP_PROJECT_ID}/subscriptions/publisher-sub" "$$push_config" "publisher-sub" "PushSubscription"
+
+
+        # Create GCS buckets (Only mock ones for emulator)
+        echo "Creating GCS buckets..."
+        for bucket in viralcue-raw-clips viralcue-processed-clips viralcue-thumbnails; do
+          curl -s -X POST "http://gcs-emulator:4443/storage/v1/b?project=$${GCP_PROJECT_ID}" \
+            -H "Content-Type: application/json" \
+            -d "{\"name\": \"$$bucket\"}" > /dev/null 2>&1 && \
+            echo "  Created bucket: $$bucket" || \
+            echo "  (bucket $$bucket exists)"
+        done
+
+        echo "=== GCP Infrastructure Ready! ==="
+
+  # ============================================
+  # APPLICATION SERVICES
+  # ============================================
+
+  # AI Engine (Python) - Vertex AI / Pub/Sub
+  ai-engine:
+    build:
+      context: ./services/ai-engine
+      dockerfile: Dockerfile
+    container_name: viralcue-ai-engine
+    depends_on:
+      init-gcp:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    environment:
+      # Emulator Configuration
+      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID}
+      # GCP Native Authentication (Still mounted for Vertex AI if needed)
+      - GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/application_default_credentials.json
+      # Database
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/viralcue
+      # AI Configuration (fallback for local dev)
+      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - OLLAMA_MODEL_ID=${OLLAMA_MODEL_ID:-deepseek-v3.1:671b-cloud}
+      # Vertex AI (for production/testing with real API)
+      - USE_VERTEX_AI=${USE_VERTEX_AI:-false}
+      - VERTEX_AI_PROJECT=${VERTEX_AI_PROJECT:-}
+      - VERTEX_AI_LOCATION=${VERTEX_AI_LOCATION:-us-central1}
+    volumes:
+      - ./services/ai-engine/src:/app/src
+      # Mount Host ADC Credentials
+      - ~/.config/gcloud:/root/.config/gcloud
+    restart: on-failure
+
+  # HLS Fetcher (Python) - Server-side audio capture
+  hls-fetcher:
+    build:
+      context: ./services/hls-fetcher
+      dockerfile: Dockerfile
+    container_name: viralcue-hls-fetcher
+    depends_on:
+      init-gcp:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    ports:
+      - "3003:3003"
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Emulator Configuration
+      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID}
+      # GCP Native Authentication (ADC)
+      - GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/application_default_credentials.json
+      # API
+      - API_URL=http://host.docker.internal:3001
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY:-internal-dev-key}
+      # External APIs
+      - TWITCH_CLIENT_ID=${TWITCH_CLIENT_ID:-}
+      - TWITCH_CLIENT_SECRET=${TWITCH_CLIENT_SECRET:-}
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
+      - REDIS_URL=redis://redis:6379
+      # Buckets (Just config compliance, not used for IO)
+      - RAW_CLIPS_BUCKET=${RAW_CLIPS_BUCKET}
+      - PROCESSED_CLIPS_BUCKET=${PROCESSED_CLIPS_BUCKET}
+      - THUMBNAILS_BUCKET=${THUMBNAILS_BUCKET}
+    volumes:
+      - ./services/hls-fetcher/src:/app/src
+      # Mount Host ADC Credentials
+      - ~/.config/gcloud:/root/.config/gcloud
+    restart: on-failure
+
+  # Clip Fetcher (formerly Sniper) - Video download/processing
+  clip-fetcher:
+    build:
+      context: ./services/clip-fetcher
+      dockerfile: Dockerfile
+    container_name: viralcue-clip-fetcher
+    depends_on:
+      init-gcp:
+        condition: service_completed_successfully
+    environment:
+      # HYBRID CONFIGURATION
+      # 1. Pub/Sub -> Emulator
+      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
+      # 2. Storage -> Real GCS (ADC)
+      # We intentionally do NOT set STORAGE_EMULATOR_HOST
+      - GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/application_default_credentials.json
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID}
+
+      - TWITCH_CLIENT_ID=${TWITCH_CLIENT_ID}
+      - TWITCH_CLIENT_SECRET=${TWITCH_CLIENT_SECRET}
+      - API_URL=http://host.docker.internal:3001
+      - INTERNAL_API_KEY=internal-dev-key
+      - CLIPS_READY_TOPIC=viralcue-clip-downloaded
+      # Buckets (Real)
+      - RAW_CLIPS_BUCKET=${RAW_CLIPS_BUCKET}
+      - PROCESSED_CLIPS_BUCKET=${PROCESSED_CLIPS_BUCKET}
+      - THUMBNAILS_BUCKET=${THUMBNAILS_BUCKET}
+    volumes:
+      - ./services/clip-fetcher/src:/app/src
+      # Mount Host ADC Credentials
+      - ~/.config/gcloud:/root/.config/gcloud
+    restart: on-failure
+
+  # Publisher Webhook (Cloud Function Runner)
+  publisher-webhook:
+    build: ./functions/publisher-webhook
+    container_name: viralcue-publisher
+    environment:
+      # Emulator Configuration
+      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
+      - GOOGLE_CLOUD_PROJECT=${GCP_PROJECT_ID}
+      - FIRESTORE_EMULATOR_HOST=firestore-emulator:8086
+      # GCP Native Authentication (ADC)
+      - GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/application_default_credentials.json
+      - PORT=8080
+      # Database & Cache (Internal Docker Network)
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/viralcue
+      - REDIS_URL=redis://redis:6379
+      # OAuth Credentials (from host .env)
+      - TIKTOK_CLIENT_KEY=${TIKTOK_CLIENT_KEY}
+      - TIKTOK_CLIENT_SECRET=${TIKTOK_CLIENT_SECRET}
+      - META_CLIENT_ID=${META_CLIENT_ID}
+      - META_CLIENT_SECRET=${META_CLIENT_SECRET}
+      - YOUTUBE_CLIENT_ID=${YOUTUBE_CLIENT_ID}
+      - YOUTUBE_CLIENT_SECRET=${YOUTUBE_CLIENT_SECRET}
+      - TWITTER_CLIENT_ID=${TWITTER_CLIENT_ID}
+      - TWITTER_CLIENT_SECRET=${TWITTER_CLIENT_SECRET}
+    ports:
+      - "8081:8080"
+    depends_on:
+      init-gcp:
+        condition: service_completed_successfully
+
+  # Chat Sender - Affiliate link chat bot
+  chat-sender:
+    build: ./services/chat-sender
+    container_name: viralcue-chat-sender
+    environment:
+      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID}
+      - PUBSUB_SUBSCRIPTION=chat-sender-sub
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/viralcue
+      - TWITCH_CLIENT_ID=${TWITCH_CLIENT_ID:-}
+      - TWITCH_CLIENT_SECRET=${TWITCH_CLIENT_SECRET:-}
+      - PRODUCT_COOLDOWN_SECONDS=300
+      - STREAM_MAX_MESSAGES_PER_HOUR=10
+      - DRY_RUN=${CHAT_SENDER_DRY_RUN:-true}
+    depends_on:
+      init-gcp:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    restart: on-failure
+
+volumes:
+  postgres_data:
+  redis_data:
+  gcs_data:
