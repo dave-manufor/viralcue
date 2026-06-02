@@ -9,7 +9,7 @@ import toast from "react-hot-toast";
 interface Draft {
   id: string;
   content: string;
-  draftType: "TWEET" | "AFFILIATE" | "CHAT_MESSAGE";
+  draftType: "TWEET" | "THREAD" | "SHORT_VIDEO" | "AFFILIATE" | "CHAT_MESSAGE";
   confidenceScore: number;
   transcriptSnippet?: string;
   videoUrl?: string;

@@ -36,7 +36,7 @@ interface StreamDetail {
 interface Draft {
   id: string;
   content: string;
-  draftType: "TWEET" | "AFFILIATE" | "CHAT_MESSAGE";
+  draftType: "TWEET" | "THREAD" | "SHORT_VIDEO" | "AFFILIATE" | "CHAT_MESSAGE";
   confidenceScore: number | null;
   status: string;
   videoUrl: string | null;
