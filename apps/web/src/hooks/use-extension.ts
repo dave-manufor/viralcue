@@ -15,6 +15,13 @@ interface UseExtensionReturn {
   status: ExtensionStatus["status"];
   activeStreamId: string | null;
   activeSessionId: string | null;
+  activate: (params: {
+    streamId: string;
+    streamUrl: string;
+    token: string;
+    sessionId: string;
+  }) => Promise<void>;
+  deactivate: () => Promise<void>;
 }
 
 export function useExtension(): UseExtensionReturn {
@@ -71,6 +78,25 @@ export function useExtension(): UseExtensionReturn {
     };
   }, []);
 
+  const activate = async (params: {
+    streamId: string;
+    streamUrl: string;
+    token: string;
+    sessionId: string;
+  }) => {
+    window.postMessage(
+      {
+        type: "VIRALCUE_START_RECORDING",
+        payload: params,
+      },
+      "*"
+    );
+  };
+
+  const deactivate = async () => {
+    window.postMessage({ type: "VIRALCUE_STOP_RECORDING" }, "*");
+  };
+
   return {
     isInstalled,
     isReady,
@@ -78,5 +104,7 @@ export function useExtension(): UseExtensionReturn {
     status,
     activeStreamId,
     activeSessionId,
+    activate,
+    deactivate,
   };
 }

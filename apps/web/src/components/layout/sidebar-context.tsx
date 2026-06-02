@@ -11,12 +11,12 @@ type SidebarContextType = {
 const SidebarContext = createContext<SidebarContextType | undefined>(undefined);
 
 export function SidebarProvider({ children }: { children: React.ReactNode }) {
-  const [collapsed, setCollapsed] = useState(() => {
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
     // Initialize from localStorage during hydration
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("sidebar-collapsed");
       if (saved) {
-        return JSON.parse(saved);
+        return JSON.parse(saved) === true;
       }
     }
     return false;
