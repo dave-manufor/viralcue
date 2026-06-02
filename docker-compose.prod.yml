@@ -1,0 +1,116 @@
+version: "3.8"
+
+services:
+  # ============================================
+  # IN-MEMORY CACHE
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    container_name: viralcue-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+  # ============================================
+  # APPLICATION SERVICES
+  # ============================================
+  ai-engine:
+    build:
+      context: ./services/ai-engine
+      dockerfile: Dockerfile
+    container_name: viralcue-ai-engine
+    env_file:
+      - .env.prod
+    environment:
+      # GCP Native Authentication
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcp-credentials.json
+    volumes:
+      - ./infra/gcp-credentials.json:/app/gcp-credentials.json:ro
+    restart: always
+
+  hls-fetcher:
+    build:
+      context: ./services/hls-fetcher
+      dockerfile: Dockerfile
+    container_name: viralcue-hls-fetcher
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "3003:3003"
+    env_file:
+      - .env.prod
+    environment:
+      - PYTHONUNBUFFERED=1
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcp-credentials.json
+      - REDIS_URL=redis://redis:6379
+    volumes:
+      - ./infra/gcp-credentials.json:/app/gcp-credentials.json:ro
+    restart: always
+
+  clip-fetcher:
+    build:
+      context: ./services/clip-fetcher
+      dockerfile: Dockerfile
+    container_name: viralcue-clip-fetcher
+    env_file:
+      - .env.prod
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcp-credentials.json
+      - CLIPS_READY_TOPIC=viralcue-clip-downloaded
+    volumes:
+      - ./infra/gcp-credentials.json:/app/gcp-credentials.json:ro
+    restart: always
+
+  publisher-webhook:
+    build: ./functions/publisher-webhook
+    container_name: viralcue-publisher
+    ports:
+      - "8081:8080"
+    env_file:
+      - .env.prod
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcp-credentials.json
+      - GOOGLE_CLOUD_PROJECT=${GCP_PROJECT_ID}
+      - REDIS_URL=redis://redis:6379
+      - PORT=8080
+    volumes:
+      - ./infra/gcp-credentials.json:/app/gcp-credentials.json:ro
+    restart: always
+
+  chat-sender:
+    build: ./services/chat-sender
+    container_name: viralcue-chat-sender
+    env_file:
+      - .env.prod
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcp-credentials.json
+      - PUBSUB_SUBSCRIPTION=chat-sender-sub
+    volumes:
+      - ./infra/gcp-credentials.json:/app/gcp-credentials.json:ro
+    restart: always
+
+volumes:
+  redis_data:
+
+  api:
+    build:
+      context: .
+      dockerfile: ./services/api/Dockerfile
+    container_name: viralcue-api
+    ports:
+      - "3001:3001"
+    env_file:
+      - .env.prod
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcp-credentials.json
+    volumes:
+      - ./infra/gcp-credentials.json:/app/gcp-credentials.json:ro
+    restart: always
