@@ -58,7 +58,7 @@ function StreamCard({
 }: StreamCardProps) {
   const isMonitoring = activeSession?.streamId === stream.id;
   const hasOtherActiveSession =
-    activeSession && activeSession.streamId !== stream.id;
+    !!activeSession && activeSession.streamId !== stream.id;
 
   const [duration, setDuration] = useState(0);
 
