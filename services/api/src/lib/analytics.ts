@@ -20,7 +20,7 @@ export type ContextEventType =
 interface TrackEventOptions {
   userId: string;
   eventType: ContextEventType | string;
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, any>;
 }
 
 /**

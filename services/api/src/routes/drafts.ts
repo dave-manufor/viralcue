@@ -35,7 +35,7 @@ draftsRouter.get("/", async (req: AuthenticatedRequest, res, next) => {
       orderBy: { createdAt: "desc" },
     });
 
-    res.json({wh
+    res.json({
       drafts: drafts.map((d) => ({
         id: d.id,
         draftType: d.draftType,
@@ -126,7 +126,7 @@ draftsRouter.post(
           : defaultPlatforms;
 
         // Also filter by actually connected accounts
-        const connections = await prisma.Connection.findMany({
+        const connections = await prisma.connection.findMany({
           where: { userId },
           select: { provider: true },
         });

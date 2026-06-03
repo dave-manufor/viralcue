@@ -1,0 +1,13 @@
+.git
+node_modules
+**/node_modules
+.env*
+!.env.example
+.turbo
+dist
+**/dist
+.pytest_cache
+__pycache__
+*.pyc
+.DS_Store
+Thumbs.db

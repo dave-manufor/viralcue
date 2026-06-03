@@ -274,7 +274,6 @@ internalRouter.get(
           channelDescription: activeContext.channelDescription,
           targetAudience: activeContext.targetAudience,
           avoidTopics: activeContext.avoidTopics,
-          customInstructions: activeContext.customInstructions,
         },
       });
     } catch (error: any) {
