@@ -12,7 +12,7 @@ COPY . .
 
 # Install dependencies and build
 RUN pnpm install
-RUN npx prisma generate --schema=packages/db/prisma/schema.prisma
+RUN DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy" pnpm --filter @viralcue/db exec prisma generate --schema=prisma/schema.prisma
 RUN pnpm --filter @viralcue/api build
 
 # Expose port
