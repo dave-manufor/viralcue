@@ -8,11 +8,13 @@ export default defineConfig({
   // Where migrations should be generated
   migrations: {
     path: "prisma/migrations",
+    seed: "npx tsx prisma/seed.ts",
   },
 
   // The database URL
   datasource: {
     // Type Safe env() helper
     url: env("DATABASE_URL"),
+    directUrl: env("DIRECT_URL"),
   },
 });

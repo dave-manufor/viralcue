@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     
     # GCP
     gcp_project_id: str = "viralcue-local"
+    pubsub_mode: str = "pull"  # "pull" or "push"
+    port: int = 8080  # Port for HTTP server in push mode
     
     # Pub/Sub
     viral_candidates_subscription: str = "clip-fetcher-sub"

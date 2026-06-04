@@ -6,6 +6,9 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Union
+import json
+import base64
+from aiohttp import web
 
 import structlog
 from dotenv import load_dotenv
@@ -283,6 +286,61 @@ class AIEngine:
                 logger.exception("Error processing transcripts", error=str(e))
                 await asyncio.sleep(5)  # Back off on error
 
+    async def handle_push(self, request: web.Request) -> web.Response:
+        """Handle Pub/Sub push messages."""
+        try:
+            data = await request.json()
+            if "message" in data and "data" in data["message"]:
+                payload = base64.b64decode(data["message"]["data"]).decode("utf-8")
+                body = json.loads(payload)
+
+                user_id = body.get("userId")
+                session_id = body.get("sessionId")
+                stream_id = body.get("streamId", session_id)
+                transcript = body.get("transcript")
+
+                if not all([user_id, session_id, transcript]):
+                    logger.warning("Invalid message via push", body=body)
+                    return web.Response(status=400)
+
+                logger.info(
+                    "Processing transcript (Push)",
+                    session_id=session_id,
+                    stream_id=stream_id,
+                    length=len(transcript),
+                )
+
+                import time
+                transcript_timestamp = body.get("timestamp", time.time())
+                channel_name = body.get("channelName", "")
+
+                affiliate_keywords = await self.db_client.get_user_affiliate_keywords(user_id)
+
+                draft = await self.process_transcript(
+                    transcript_text=transcript,
+                    confidence=body.get("confidence", 1.0),
+                    session_id=session_id,
+                    stream_id=stream_id,
+                    user_id=user_id,
+                    timestamp=transcript_timestamp,
+                    channel_name=channel_name,
+                    platform=body.get("platform", "TWITCH"),
+                    affiliate_keywords=affiliate_keywords,
+                )
+
+                if draft:
+                    if self.settings.use_gcp_pubsub:
+                        self.messaging_client.publish_draft(user_id, stream_id, draft)
+                    else:
+                        self.messaging_client.publish_draft(user_id, draft)
+
+                return web.Response(status=200)
+            else:
+                return web.Response(status=400, text="Invalid message format")
+        except Exception as e:
+            logger.exception("Error handling push message", error=str(e))
+            return web.Response(status=500)
+
     def _ack_message(self, msg: dict) -> None:
         """Acknowledge a message based on the messaging system."""
         if self.settings.use_gcp_pubsub:
@@ -319,7 +377,21 @@ async def main() -> None:
         loop.add_signal_handler(sig, shutdown_handler)
 
     try:
-        await engine.start()
+        if settings.pubsub_mode == "push":
+            engine.running = True
+            app = web.Application()
+            app.router.add_post('/pubsub/push', engine.handle_push)
+            runner = web.AppRunner(app)
+            await runner.setup()
+            site = web.TCPSite(runner, '0.0.0.0', settings.port)
+            logger.info("Starting AI Engine HTTP Push Server", port=settings.port)
+            await site.start()
+            
+            # Keep running until stopped
+            while engine.running:
+                await asyncio.sleep(1)
+        else:
+            await engine.start()
     except Exception as e:
         logger.exception("AI Engine error", error=str(e))
         raise

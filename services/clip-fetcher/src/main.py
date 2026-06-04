@@ -9,6 +9,7 @@ import tempfile
 from dataclasses import dataclass
 from typing import Optional
 from pathlib import Path
+import base64
 
 # IMPORTANT: Fix STORAGE_EMULATOR_HOST before importing google.cloud.storage
 # The library caches this value at import time
@@ -721,6 +722,25 @@ async def handle_message(message_data: dict) -> bool:
         logger.exception("Error processing message", error=str(e))
         return False
 
+async def handle_push(request: aiohttp.web.Request) -> aiohttp.web.Response:
+    """Handle Pub/Sub push messages."""
+    import json
+    try:
+        data = await request.json()
+        if "message" in data and "data" in data["message"]:
+            payload = base64.b64decode(data["message"]["data"]).decode("utf-8")
+            body = json.loads(payload)
+            
+            success = await handle_message(body)
+            if success:
+                return aiohttp.web.Response(status=200)
+            else:
+                return aiohttp.web.Response(status=500)
+        else:
+            return aiohttp.web.Response(status=400, text="Invalid message format")
+    except Exception as e:
+        logger.exception("Error handling push message", error=str(e))
+        return aiohttp.web.Response(status=500)
 
 async def main():
     """
@@ -817,7 +837,18 @@ async def main():
         return len(response.received_messages)
 
     # If running locally/emulator, loop forever
-    if emulator_host:
+    if settings.pubsub_mode == "push":
+        app = aiohttp.web.Application()
+        app.router.add_post('/pubsub/push', handle_push)
+        runner = aiohttp.web.AppRunner(app)
+        await runner.setup()
+        site = aiohttp.web.TCPSite(runner, '0.0.0.0', settings.port)
+        logger.info("Starting Clip Fetcher HTTP Push Server", port=settings.port)
+        await site.start()
+        
+        while True:
+            await asyncio.sleep(3600)
+    elif emulator_host:
         logger.info("Running in long-polling mode (Emulator detected)")
         while True:
             try:

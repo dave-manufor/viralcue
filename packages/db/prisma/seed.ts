@@ -1,66 +1,61 @@
-import { prisma } from "../src/client";
+import { prisma } from '../src/client';
 
 async function main() {
-  console.log("🌱 Seeding database...");
+  console.log('Seeding subscription plans...');
 
-  // Create subscription plans
-  const freePlan = await prisma.subscriptionPlan.upsert({
-    where: { name: "free" },
-    update: {},
-    create: {
-      name: "free",
-      displayName: "Free",
+  const plans = [
+    {
+      name: 'free',
+      displayName: 'Free',
       draftRetentionHours: 24,
-      streamingHoursLimit: 10,
+      monthlyPriceUsd: 0.00,
+      yearlyPriceUsd: 0.00,
+      streamingHoursLimit: 10.00,
+      maxDraftsPerStream: 50,
     },
-  });
-
-  const starterPlan = await prisma.subscriptionPlan.upsert({
-    where: { name: "starter" },
-    update: {},
-    create: {
-      name: "starter",
-      displayName: "Starter",
-      draftRetentionHours: 48,
-      streamingHoursLimit: 50,
-    },
-  });
-
-  const proPlan = await prisma.subscriptionPlan.upsert({
-    where: { name: "pro" },
-    update: {},
-    create: {
-      name: "pro",
-      displayName: "Pro",
+    {
+      name: 'starter',
+      displayName: 'Starter',
       draftRetentionHours: 72,
-      streamingHoursLimit: 200,
+      monthlyPriceUsd: 15.00,
+      yearlyPriceUsd: 150.00,
+      streamingHoursLimit: 50.00,
+      maxDraftsPerStream: 200,
     },
-  });
-
-  const agencyPlan = await prisma.subscriptionPlan.upsert({
-    where: { name: "agency" },
-    update: {},
-    create: {
-      name: "agency",
-      displayName: "Agency",
+    {
+      name: 'pro',
+      displayName: 'Pro',
       draftRetentionHours: 168, // 7 days
-      streamingHoursLimit: null, // Unlimited
+      monthlyPriceUsd: 39.00,
+      yearlyPriceUsd: 390.00,
+      streamingHoursLimit: 200.00,
+      maxDraftsPerStream: 1000,
     },
-  });
+    {
+      name: 'agency',
+      displayName: 'Agency',
+      draftRetentionHours: 720, // 30 days
+      monthlyPriceUsd: 99.00,
+      yearlyPriceUsd: 990.00,
+      streamingHoursLimit: 1000.00,
+      maxDraftsPerStream: 5000,
+    }
+  ];
 
-  console.log("✅ Subscription plans created:", {
-    free: freePlan.id,
-    starter: starterPlan.id,
-    pro: proPlan.id,
-    agency: agencyPlan.id,
-  });
+  for (const plan of plans) {
+    await prisma.subscriptionPlan.upsert({
+      where: { name: plan.name },
+      update: plan,
+      create: plan,
+    });
+  }
 
-  console.log("🎉 Seeding complete!");
+  console.log('Successfully seeded subscription plans.');
 }
 
 main()
   .catch((e) => {
-    console.error("❌ Seeding failed:", e);
+    console.error(e);
     process.exit(1);
   })
   .finally(async () => {

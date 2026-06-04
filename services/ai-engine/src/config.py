@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     # Feature flags
     use_gcp_pubsub: bool = True  # Set to True to use Pub/Sub instead of SQS
     use_vertex_ai: bool = True  # Enable Vertex AI Gemini (cost optimized)
+    pubsub_mode: str = "pull"  # "pull" or "push"
+    port: int = 8080  # Port for HTTP server in push mode
 
     # Bedrock (legacy)
     bedrock_model_id: str = "anthropic.claude-3-haiku-20240307-v1:0"

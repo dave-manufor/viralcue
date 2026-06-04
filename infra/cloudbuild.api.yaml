@@ -1,0 +1,7 @@
+steps:
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '-t', '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/viralcue-repo/viralcue-api', '-f', 'services/api/Dockerfile', '.']
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['push', '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/viralcue-repo/viralcue-api']
+images:
+- '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/viralcue-repo/viralcue-api'

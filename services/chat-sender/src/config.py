@@ -12,6 +12,8 @@ class Settings:
     # GCP Settings
     gcp_project_id: str = os.getenv("GCP_PROJECT_ID", "viralcue-local")
     pubsub_subscription: str = os.getenv("PUBSUB_SUBSCRIPTION", "chat-sender-sub")
+    pubsub_mode: str = os.getenv("PUBSUB_MODE", "pull")
+    port: int = int(os.getenv("PORT", "8080"))
     
     # Database
     database_url: str = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/viralcue")

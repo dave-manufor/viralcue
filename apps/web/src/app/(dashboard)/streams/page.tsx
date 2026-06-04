@@ -240,7 +240,7 @@ export default function StreamsPage() {
         return;
       }
 
-      const response = await fetch("http://localhost:3001/api/streams", {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/streams`, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
@@ -284,7 +284,7 @@ export default function StreamsPage() {
       const token = await getToken();
 
       const response = await fetch(
-        `http://localhost:3001/api/streams/${stream.id}/activate`,
+        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/streams/${stream.id}/activate`,
         {
           method: "POST",
           headers: {
@@ -338,7 +338,7 @@ export default function StreamsPage() {
       const token = await getToken();
 
       const response = await fetch(
-        `http://localhost:3001/api/streams/${stream.id}/deactivate`,
+        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/streams/${stream.id}/deactivate`,
         {
           method: "POST",
           headers: {

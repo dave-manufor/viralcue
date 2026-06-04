@@ -18,12 +18,14 @@ import asyncio
 import json
 import os
 import sys
+import base64
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 
 import structlog
 from google.cloud import pubsub_v1
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from aiohttp import web
 
 from config import settings
 from twitch_client import TwitchChatClient, TwitchTokens
@@ -241,7 +243,50 @@ class ChatSenderService:
         finally:
             asyncio.run(self.twitch.close())
 
+    async def handle_push(self, request: web.Request) -> web.Response:
+        """Handle Pub/Sub push messages."""
+        try:
+            data = await request.json()
+            if "message" in data and "data" in data["message"]:
+                payload = base64.b64decode(data["message"]["data"]).decode("utf-8")
+                body = json.loads(payload)
+                success = await self.process_message(body)
+                if success:
+                    return web.Response(status=200)
+                else:
+                    return web.Response(status=500)
+            else:
+                return web.Response(status=400, text="Invalid message format")
+        except Exception as e:
+            logger.exception("[Push] Processing error", error=str(e))
+            return web.Response(status=500)
+
+    async def start_push_server(self):
+        """Start the HTTP server for Pub/Sub push messages."""
+        app = web.Application()
+        app.router.add_post('/pubsub/push', self.handle_push)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, '0.0.0.0', settings.port)
+        logger.info("[ChatSender] Starting HTTP Push Server", port=settings.port)
+        await site.start()
+        
+        while True:
+            await asyncio.sleep(3600)
+
+    def start(self):
+        """Start the service based on configured mode."""
+        if settings.pubsub_mode == "push":
+            try:
+                asyncio.run(self.start_push_server())
+            except KeyboardInterrupt:
+                logger.info("[ChatSender] Shutting down")
+            finally:
+                asyncio.run(self.twitch.close())
+        else:
+            self.run()
+
 
 if __name__ == "__main__":
     service = ChatSenderService()
-    service.run()
+    service.start()
