@@ -14,6 +14,30 @@ export const metadata: Metadata = {
   description:
     "Real-time viral moment detection and content generation for streamers",
   manifest: "/manifest.json",
+  openGraph: {
+    title: "ViralCue - AI Co-pilot for Live Streamers",
+    description:
+      "Real-time viral moment detection and content generation for streamers",
+    url: "https://viralcue-api.vercel.app",
+    siteName: "ViralCue",
+    images: [
+      {
+        url: "/og-image.png",
+        width: 1200,
+        height: 1200,
+        alt: "ViralCue - AI Co-pilot for Live Streamers",
+      },
+    ],
+    locale: "en_US",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "ViralCue - AI Co-pilot for Live Streamers",
+    description:
+      "Real-time viral moment detection and content generation for streamers",
+    images: ["/og-image.png"],
+  },
 };
 
 export const viewport: Viewport = {
