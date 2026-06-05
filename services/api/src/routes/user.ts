@@ -12,6 +12,7 @@ import {
   trackContextRollback,
   trackOnboarding,
 } from "../lib/analytics";
+import { decrypt } from "../lib/crypto";
 
 export const userRouter: RouterType = Router();
 
@@ -107,7 +108,7 @@ userRouter.get("/connections", async (req: AuthenticatedRequest, res, next) => {
       expiresAt: c.expiresAt,
       // Only needs reconnect if expired AND no refresh token available
       needsReconnect: c.expiresAt
-        ? c.expiresAt < now && !c.refreshToken
+        ? c.expiresAt < now && !decrypt(c.refreshToken)
         : false,
     }));
 

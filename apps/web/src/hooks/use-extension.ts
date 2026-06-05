@@ -89,12 +89,12 @@ export function useExtension(): UseExtensionReturn {
         type: "VIRALCUE_START_RECORDING",
         payload: params,
       },
-      "*"
+      window.location.origin
     );
   };
 
   const deactivate = async () => {
-    window.postMessage({ type: "VIRALCUE_STOP_RECORDING" }, "*");
+    window.postMessage({ type: "VIRALCUE_STOP_RECORDING" }, window.location.origin);
   };
 
   return {

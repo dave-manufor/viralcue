@@ -204,6 +204,8 @@ model Draft {
   session         StreamingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   affiliateLink   AffiliateLink?   @relation(fields: [affiliateLinkId], references: [id])
   
+  @@index([sessionId])
+  @@index([status, createdAt])
   @@map("drafts")
 }
 

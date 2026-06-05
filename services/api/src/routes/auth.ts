@@ -5,6 +5,8 @@ import {
   getOrCreateUser,
   AuthenticatedRequest,
 } from "../middleware/clerk-auth";
+import { encrypt, decrypt } from "../lib/crypto";
+import crypto from "crypto";
 
 export const authRouter: RouterType = Router();
 
@@ -85,7 +87,7 @@ const TWITTER_SCOPES = [
 // In-memory state store for OAuth CSRF protection
 const pendingStates = new Map<
   string,
-  { userId: string; provider: string; createdAt: number }
+  { userId: string; provider: string; createdAt: number; codeVerifier?: string }
 >();
 
 /**
@@ -139,7 +141,7 @@ authRouter.get(
           expiresAt: c.expiresAt,
           // Only needs reconnect if expired AND no refresh token available
           needsReconnect: c.expiresAt
-            ? c.expiresAt < now && !c.refreshToken
+            ? c.expiresAt < now && !decrypt(c.refreshToken)
             : false,
         })
       );
@@ -178,10 +180,11 @@ const getAuthUrl = async (
   clientId: string,
   redirectUri: string,
   scope: string,
-  extraParams: Record<string, string> = {}
+  extraParams: Record<string, string> = {},
+  codeVerifier?: string
 ) => {
   const state = crypto.randomUUID();
-  pendingStates.set(state, { userId, provider, createdAt: Date.now() });
+  pendingStates.set(state, { userId, provider, createdAt: Date.now(), codeVerifier });
 
   // Cleanup old states
   const tenMinutesAgo = Date.now() - 10 * 60 * 1000;
@@ -261,8 +264,9 @@ const handleCallback = async (
       headers["Authorization"] = `Basic ${auth}`;
       params.delete("client_secret"); // Don't send in body if using Basic Auth
       params.delete("client_id");
-      // PKCE would be better but simple flow for now
-      params.append("code_verifier", "challenge"); // Placeholder if strictly required, but usually needs real PKCE flow
+      // Use the actual codeVerifier stored in pendingStates for Twitter OAuth PKCE
+      const codeVerifier = stateData.codeVerifier || "challenge";
+      params.append("code_verifier", codeVerifier);
     }
 
     const tokenResponse = await fetch(providerConfig.tokenUrl, {
@@ -348,16 +352,16 @@ const handleCallback = async (
         provider: providerConfig.provider,
         platformUserId,
         platformUsername,
-        accessToken: access_token,
-        refreshToken: refresh_token, // May be null if not offline access
+        accessToken: encrypt(access_token)!,
+        refreshToken: encrypt(refresh_token), // May be null if not offline access
         scopes: [], // Simplify for now
         expiresAt: new Date(Date.now() + (expires_in || 3600) * 1000),
       },
       update: {
         platformUserId,
         platformUsername,
-        accessToken: access_token,
-        refreshToken: refresh_token, // Only update if provided
+        accessToken: encrypt(access_token)!,
+        refreshToken: encrypt(refresh_token), // Only update if provided
         expiresAt: new Date(Date.now() + (expires_in || 3600) * 1000),
       },
     });
@@ -516,10 +520,13 @@ authRouter.get(
   async (req: AuthenticatedRequest, res, next) => {
     try {
       const user = await getOrCreateUser(req.clerkUserId!);
-      // PKCE params normally required: code_challenge, code_challenge_method
-      // For implementation simplicity here we skip complex PKCE calc, assuming simple OAuth2 conf or library usage usually handles this.
-      // However, Twitter API v2 STRICTLY requires PKCE.
-      // We'll pass a fixed dummy challenge for now, but in prod use a library like `twitter-api-v2`.
+      // Generate a cryptographically secure random codeVerifier and SHA-256 codeChallenge for Twitter PKCE
+      const codeVerifier = crypto.randomBytes(32).toString("base64url");
+      const codeChallenge = crypto
+        .createHash("sha256")
+        .update(codeVerifier)
+        .digest("base64url");
+
       const url = await getAuthUrl(
         user.id,
         "TWITTER",
@@ -527,7 +534,8 @@ authRouter.get(
         TWITTER_CLIENT_ID,
         TWITTER_REDIRECT_URI,
         TWITTER_SCOPES,
-        { code_challenge: "challenge", code_challenge_method: "plain" }
+        { code_challenge: codeChallenge, code_challenge_method: "S256" },
+        codeVerifier
       );
       res.json({ url });
     } catch (e) {

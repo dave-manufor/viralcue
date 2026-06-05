@@ -19,6 +19,7 @@
     "zod": "^3.22.0",
     "@google-cloud/pubsub": "^4.9.0",
     "@google-cloud/storage": "^7.14.0",
+    "@google-cloud/secret-manager": "^5.0.1",
     "firebase-admin": "^12.7.0"
   },
   "devDependencies": {

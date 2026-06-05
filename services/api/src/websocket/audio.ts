@@ -1,5 +1,14 @@
 import { Server as HttpServer } from "http";
 import { Server, Socket } from "socket.io";
+import { createClerkClient } from "@clerk/backend";
+
+// Initialize Clerk client for token verification
+const clerkClient = createClerkClient({
+  secretKey: process.env.CLERK_SECRET_KEY,
+  publishableKey:
+    process.env.CLERK_PUBLISHABLE_KEY ||
+    process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
+});
 
 interface AudioSession {
   userId: string;
@@ -26,12 +35,63 @@ export function setupAudioSocket(server: HttpServer): Server {
     },
   });
 
+  // Authentication middleware
+  audioIO.use(async (socket, next) => {
+    const token = socket.handshake.auth.token;
+
+    if (!token) {
+      return next(new Error("Authentication required"));
+    }
+
+    try {
+      // Verify Clerk JWT token
+      const fakeRequest = new Request("http://localhost", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      const result = await clerkClient.authenticateRequest(fakeRequest);
+
+      if (!result.isSignedIn) {
+        return next(new Error("Invalid or expired token"));
+      }
+
+      const { userId: clerkId } = result.toAuth();
+
+      if (!clerkId) {
+        return next(new Error("Invalid token"));
+      }
+
+      // Look up DB user ID
+      const { prisma } = await import("@viralcue/db");
+      const user = await prisma.user.findUnique({
+        where: { authProviderId: clerkId },
+        select: { id: true },
+      });
+
+      if (!user) {
+        console.error(
+          `[Audio Socket] User not found for Clerk ID ${clerkId}`
+        );
+        return next(new Error("User not found"));
+      }
+
+      // Attach DB userId to socket
+      socket.data.userId = user.id;
+      next();
+    } catch (error) {
+      console.error("[Audio Socket] Auth error:", error);
+      next(new Error("Authentication failed"));
+    }
+  });
+
   audioIO.on("connection", (socket: Socket) => {
     console.log("🎙️ New audio Socket.IO connection");
 
     // Initialize session
     const session: AudioSession = {
-      userId: socket.handshake.auth.userId || "anonymous",
+      userId: socket.data.userId || "anonymous",
       sessionId: crypto.randomUUID(),
       startTime: new Date(),
       audioBuffer: [],
@@ -47,6 +107,12 @@ export function setupAudioSocket(server: HttpServer): Server {
     socket.on("audio:data", (data: Buffer) => {
       const currentSession = sessions.get(socket.id);
       if (!currentSession) return;
+
+      // Restrict audio buffer accumulation in-memory (max 100 chunks) to prevent memory exhaustion
+      if (currentSession.audioBuffer.length > 100) {
+        console.warn(`[Audio Socket] Session ${socket.id} buffer exceeded threshold (${currentSession.audioBuffer.length}), discarding old chunks to prevent OOM`);
+        currentSession.audioBuffer = currentSession.audioBuffer.slice(-10);
+      }
 
       // Buffer incoming audio data
       currentSession.audioBuffer.push(data);

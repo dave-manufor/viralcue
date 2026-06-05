@@ -1,6 +1,8 @@
 import crypto from "crypto";
 import { prisma } from "@viralcue/db";
 
+import { encrypt } from "./crypto";
+
 const KICK_AUTH_URL = "https://id.kick.com/oauth/authorize";
 const KICK_TOKEN_URL = "https://id.kick.com/oauth/token";
 const KICK_CLIENT_ID = process.env.KICK_CLIENT_ID || "";
@@ -129,8 +131,8 @@ export class KickAuthClient {
       await prisma.connection.update({
         where: { id: connectionId },
         data: {
-          accessToken: tokens.access_token,
-          refreshToken: tokens.refresh_token,
+          accessToken: encrypt(tokens.access_token)!,
+          refreshToken: encrypt(tokens.refresh_token),
           expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
         },
       });

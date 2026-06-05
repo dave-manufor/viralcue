@@ -27,7 +27,13 @@ export type User = z.infer<typeof UserSchema>;
 // DRAFT TYPES
 // ============================================
 
-export const DraftTypeSchema = z.enum(["TWEET", "CHAT_MESSAGE", "AFFILIATE"]);
+export const DraftTypeSchema = z.enum([
+  "THREAD",
+  "SHORT_VIDEO",
+  "CHAT_MESSAGE",
+  "AFFILIATE",
+  "TWEET", // Legacy/Deprecated
+]);
 export type DraftType = z.infer<typeof DraftTypeSchema>;
 
 export const DraftStatusSchema = z.enum([

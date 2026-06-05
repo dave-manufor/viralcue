@@ -17,12 +17,71 @@ import time
 import io
 import requests
 import psycopg2
+from psycopg2.pool import SimpleConnectionPool
 import redis
 import functions_framework
 from typing import Optional, Tuple
 import google.oauth2.credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.backends import default_backend
+
+# Global connection pool initialized lazily
+db_pool = None
+
+def get_db_pool():
+    global db_pool
+    if db_pool is None:
+        db_pool = SimpleConnectionPool(
+            1,
+            10,
+            os.getenv("DATABASE_URL")
+        )
+    return db_pool
+
+def decrypt_token(encrypted_text: Optional[str]) -> Optional[str]:
+    if not encrypted_text:
+        return encrypted_text
+    try:
+        parts = encrypted_text.split(':')
+        if len(parts) != 3:
+            return encrypted_text
+        iv_hex, auth_tag_hex, ciphertext_hex = parts
+        iv = bytes.fromhex(iv_hex)
+        auth_tag = bytes.fromhex(auth_tag_hex)
+        ciphertext = bytes.fromhex(ciphertext_hex)
+        key_hex = os.getenv("TOKEN_ENCRYPTION_KEY") or "f6d83cf932bb8fe0a43063f25c78b66e60b1359d4c2b9fce63b4b5e0ee4a2754"
+        key = bytes.fromhex(key_hex)
+        decryptor = Cipher(
+            algorithms.AES(key),
+            modes.GCM(iv, auth_tag),
+            backend=default_backend()
+        ).decryptor()
+        decrypted = decryptor.update(ciphertext) + decryptor.finalize()
+        return decrypted.decode('utf-8')
+    except Exception as e:
+        print(f"Decryption warning, returning raw: {e}")
+        return encrypted_text
+
+def encrypt_token(text: Optional[str]) -> Optional[str]:
+    if not text:
+        return text
+    try:
+        iv = os.urandom(12)
+        key_hex = os.getenv("TOKEN_ENCRYPTION_KEY") or "f6d83cf932bb8fe0a43063f25c78b66e60b1359d4c2b9fce63b4b5e0ee4a2754"
+        key = bytes.fromhex(key_hex)
+        encryptor = Cipher(
+            algorithms.AES(key),
+            modes.GCM(iv),
+            backend=default_backend()
+        ).encryptor()
+        ciphertext = encryptor.update(text.encode('utf-8')) + encryptor.finalize()
+        auth_tag = encryptor.tag
+        return f"{iv.hex()}:{auth_tag.hex()}:{ciphertext.hex()}"
+    except Exception as e:
+        print(f"Encryption failed: {e}")
+        return text
 
 
 class IdempotencyChecker:
@@ -122,8 +181,10 @@ class RateLimiter:
 
 def update_connection_tokens(user_id: str, platform: str, new_tokens: dict) -> None:
     """Update connection tokens in the database."""
+    conn = None
     try:
-        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+        pool = get_db_pool()
+        conn = pool.getconn()
         cursor = conn.cursor()
         
         # Determine what fields to update
@@ -133,6 +194,9 @@ def update_connection_tokens(user_id: str, platform: str, new_tokens: dict) -> N
         if expires_in:
             expires_at = int(time.time()) + int(expires_in)
             
+        encrypted_access = encrypt_token(new_tokens["access_token"])
+        encrypted_refresh = encrypt_token(new_tokens.get("refresh_token"))
+
         cursor.execute("""
             UPDATE connections
             SET access_token = %s,
@@ -141,17 +205,22 @@ def update_connection_tokens(user_id: str, platform: str, new_tokens: dict) -> N
                 updated_at = NOW()
             WHERE user_id = %s AND provider = %s
         """, (
-            new_tokens["access_token"], 
-            new_tokens.get("refresh_token"), 
+            encrypted_access, 
+            encrypted_refresh, 
             expires_at, 
             user_id, 
             platform.upper()
         ))
         conn.commit()
-        conn.close()
+        cursor.close()
         print(f"Updated tokens for {platform}")
     except Exception as e:
         print(f"Failed to update tokens: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        if conn:
+            get_db_pool().putconn(conn)
 
 
 def refresh_access_token(user_id: str, platform: str, refresh_token: str) -> dict | None:
@@ -254,8 +323,10 @@ def refresh_access_token(user_id: str, platform: str, refresh_token: str) -> dic
 
 def get_connection_tokens(user_id: str, platform: str) -> dict | None:
     """Fetch OAuth tokens directly from PostgreSQL and refresh if needed."""
+    conn = None
     try:
-        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+        pool = get_db_pool()
+        conn = pool.getconn()
         cursor = conn.cursor()
         db_platform = platform.upper()
         
@@ -265,13 +336,20 @@ def get_connection_tokens(user_id: str, platform: str) -> dict | None:
             WHERE user_id = %s AND provider = %s
         """, (user_id, db_platform))
         row = cursor.fetchone()
-        conn.close()
+        cursor.close()
+        
+        # Release the connection back to the pool as early as possible
+        pool.putconn(conn)
+        conn = None
         
         if not row:
             print(f"No connection found for user {user_id} and platform {platform}")
             return None
             
-        access_token, refresh_token, expires_at_val, platform_user_id = row
+        encrypted_access_token, encrypted_refresh_token, expires_at_val, platform_user_id = row
+        
+        access_token = decrypt_token(encrypted_access_token)
+        refresh_token = decrypt_token(encrypted_refresh_token)
         
         # Handle datetime object from psycopg2
         expires_at = None
@@ -326,6 +404,9 @@ def get_connection_tokens(user_id: str, platform: str) -> dict | None:
     except Exception as e:
         print(f"Database error: {e}")
         return None
+    finally:
+        if conn:
+            get_db_pool().putconn(conn)
 
 
 # ============================================================================
@@ -350,8 +431,10 @@ def get_user_subscription_tier(user_id: str) -> str:
     Get user's subscription tier from database.
     Returns tier name (e.g., 'free', 'pro', 'business') or 'free' if not found.
     """
+    conn = None
     try:
-        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+        pool = get_db_pool()
+        conn = pool.getconn()
         cursor = conn.cursor()
         cursor.execute("""
             SELECT sp.name 
@@ -360,7 +443,7 @@ def get_user_subscription_tier(user_id: str) -> str:
             WHERE u.id = %s
         """, (user_id,))
         row = cursor.fetchone()
-        conn.close()
+        cursor.close()
         
         if row and row[0]:
             return row[0].lower()
@@ -368,6 +451,9 @@ def get_user_subscription_tier(user_id: str) -> str:
     except Exception as e:
         print(f"Error getting subscription tier: {e}")
         return "free"
+    finally:
+        if conn:
+            get_db_pool().putconn(conn)
 
 
 def prepare_caption(

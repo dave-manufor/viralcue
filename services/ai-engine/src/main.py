@@ -164,7 +164,8 @@ class AIEngine:
             # Timestamp is the END of the 60s transcript window, so we need to go back further
             # Window: 70s before (60s transcript + 10s buffer) → 15s after (reaction time)
             if self.settings.use_gcp_pubsub:
-                self.messaging_client.publish_viral_candidate(
+                await asyncio.to_thread(
+                    self.messaging_client.publish_viral_candidate,
                     user_id=user_id,
                     session_id=session_id,
                     stream_id=stream_id,
@@ -224,11 +225,11 @@ class AIEngine:
         
         while self.running:
             try:
-                # Receive transcript messages
+                # Receive transcript messages (non-blocking thread execution)
                 if self.settings.use_gcp_pubsub:
-                    messages = self.messaging_client.receive_transcripts(max_messages=10)
+                    messages = await asyncio.to_thread(self.messaging_client.receive_transcripts, max_messages=10)
                 else:
-                    messages = self.messaging_client.receive_transcripts(max_messages=10)
+                    messages = await asyncio.to_thread(self.messaging_client.receive_transcripts, max_messages=10)
                 
                 for msg in messages:
                     body = msg["body"]
@@ -239,7 +240,7 @@ class AIEngine:
                     
                     if not all([user_id, session_id, transcript]):
                         logger.warning("Invalid message", body=body)
-                        self._ack_message(msg)
+                        await self._ack_message(msg)
                         continue
                     
                     logger.info(
@@ -269,15 +270,15 @@ class AIEngine:
                         affiliate_keywords=affiliate_keywords,
                     )
                     
-                    # Publish draft if generated
+                    # Publish draft if generated (non-blocking thread execution)
                     if draft:
                         if self.settings.use_gcp_pubsub:
-                            self.messaging_client.publish_draft(user_id, stream_id, draft)
+                            await asyncio.to_thread(self.messaging_client.publish_draft, user_id, stream_id, draft)
                         else:
-                            self.messaging_client.publish_draft(user_id, draft)
+                            await asyncio.to_thread(self.messaging_client.publish_draft, user_id, draft)
                     
                     # Acknowledge processed message
-                    self._ack_message(msg)
+                    await self._ack_message(msg)
                 
                 # Small delay between polls
                 await asyncio.sleep(self.settings.poll_interval_seconds)
@@ -330,9 +331,9 @@ class AIEngine:
 
                 if draft:
                     if self.settings.use_gcp_pubsub:
-                        self.messaging_client.publish_draft(user_id, stream_id, draft)
+                        await asyncio.to_thread(self.messaging_client.publish_draft, user_id, stream_id, draft)
                     else:
-                        self.messaging_client.publish_draft(user_id, draft)
+                        await asyncio.to_thread(self.messaging_client.publish_draft, user_id, draft)
 
                 return web.Response(status=200)
             else:
@@ -341,12 +342,12 @@ class AIEngine:
             logger.exception("Error handling push message", error=str(e))
             return web.Response(status=500)
 
-    def _ack_message(self, msg: dict) -> None:
+    async def _ack_message(self, msg: dict) -> None:
         """Acknowledge a message based on the messaging system."""
         if self.settings.use_gcp_pubsub:
-            self.messaging_client.acknowledge_message(msg["ack_id"])
+            await asyncio.to_thread(self.messaging_client.acknowledge_message, msg["ack_id"])
         else:
-            self.messaging_client.delete_message(msg["receipt_handle"])
+            await asyncio.to_thread(self.messaging_client.delete_message, msg["receipt_handle"])
 
     async def stop(self) -> None:
         """Stop the AI engine."""

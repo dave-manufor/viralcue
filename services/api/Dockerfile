@@ -7,16 +7,30 @@ RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists
 
 RUN npm install -g pnpm
 
-# Copy the entire monorepo
+# Copy workspace configuration and package.json files first
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+COPY packages/db/package.json ./packages/db/
+COPY packages/shared/package.json ./packages/shared/
+COPY services/api/package.json ./services/api/
+COPY services/chat-sender/package.json ./services/chat-sender/
+COPY apps/web/package.json ./apps/web/
+COPY apps/extension/package.json ./apps/extension/
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile
+
+# Copy the rest of the monorepo source code
 COPY . .
 
-# Install dependencies and build
-RUN pnpm install
+# Generate Prisma client and build API package
 RUN DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy" DIRECT_URL="postgresql://dummy:dummy@localhost:5432/dummy" pnpm --filter @viralcue/db exec prisma generate --schema=prisma/schema.prisma
 RUN pnpm --filter @viralcue/api build
 
 # Expose port
 EXPOSE 3001
+
+# Use non-root node user
+USER node
 
 # Start the API
 CMD ["pnpm", "--filter", "@viralcue/api", "start"]

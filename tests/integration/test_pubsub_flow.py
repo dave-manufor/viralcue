@@ -25,8 +25,11 @@ def pubsub_client():
     # Ensure emulator is being used
     assert os.getenv("PUBSUB_EMULATOR_HOST"), "Pub/Sub emulator not configured"
     
+    # Enable message ordering for tests publishing with ordering keys
+    publisher_options = pubsub_v1.types.PublisherOptions(enable_message_ordering=True)
+    
     return {
-        "publisher": pubsub_v1.PublisherClient(),
+        "publisher": pubsub_v1.PublisherClient(publisher_options=publisher_options),
         "subscriber": pubsub_v1.SubscriberClient(),
         "project_id": os.getenv("GCP_PROJECT_ID", "viralcue-local"),
     }

@@ -1,6 +1,8 @@
 import { Request, Response, NextFunction } from "express";
 import { prisma } from "@viralcue/db";
 import { AuthenticatedRequest as ClerkAuthenticatedRequest } from "./clerk-auth";
+import { decrypt, encrypt } from "../lib/crypto";
+import { redis } from "../lib/redis";
 
 // Twitch API configuration
 const TWITCH_API_URL = "https://api.twitch.tv/helix";
@@ -103,18 +105,34 @@ export async function validateStreamOwnership(
     return res.status(400).json({ error: "Stream ID required" });
   }
 
+  const cacheKey = `viralcue:stream-ownership:${userId}:${streamId}`;
+
   try {
+    // Check Redis Cache
+    const cachedData = await redis.get(cacheKey);
+    if (cachedData) {
+      try {
+        const parsed = JSON.parse(cachedData);
+        req.stream = parsed.stream;
+        req.platformConnection = parsed.platformConnection;
+        return next();
+      } catch (err) {
+        console.warn("[Stream Auth] Failed to parse cached data, falling back to live verification:", err);
+      }
+    }
+
     // Check for Twitch connection
     const twitchConnection = await prisma.connection.findFirst({
       where: { userId, provider: "TWITCH" },
     });
 
     if (twitchConnection) {
+      const decryptedAccessToken = decrypt(twitchConnection.accessToken)!;
       // Try Twitch verification
       const stream = await getUserTwitchStream(
         streamId,
         twitchConnection.platformUserId,
-        twitchConnection.accessToken
+        decryptedAccessToken
       );
 
       if (stream) {
@@ -123,8 +141,18 @@ export async function validateStreamOwnership(
           id: twitchConnection.id,
           platform: "TWITCH",
           platformUserId: twitchConnection.platformUserId,
-          accessToken: twitchConnection.accessToken,
+          accessToken: decryptedAccessToken,
         };
+        // Cache result in Redis (5-minute TTL)
+        await redis.set(
+          cacheKey,
+          JSON.stringify({
+            stream,
+            platformConnection: req.platformConnection,
+          }),
+          "EX",
+          300
+        );
         return next();
       }
     }
@@ -135,11 +163,12 @@ export async function validateStreamOwnership(
     });
 
     if (kickConnection) {
+      const decryptedAccessToken = decrypt(kickConnection.accessToken)!;
       // Try Kick verification
       const stream = await getUserKickStream(
         streamId,
         userId,
-        kickConnection.accessToken
+        decryptedAccessToken
       );
 
       if (stream) {
@@ -148,8 +177,18 @@ export async function validateStreamOwnership(
           id: kickConnection.id,
           platform: "KICK",
           platformUserId: kickConnection.platformUserId,
-          accessToken: kickConnection.accessToken,
+          accessToken: decryptedAccessToken,
         };
+        // Cache result in Redis (5-minute TTL)
+        await redis.set(
+          cacheKey,
+          JSON.stringify({
+            stream,
+            platformConnection: req.platformConnection,
+          }),
+          "EX",
+          300
+        );
         return next();
       }
     }
@@ -203,8 +242,8 @@ async function refreshTwitchToken(
     await prisma.connection.update({
       where: { id: connectionId },
       data: {
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token || refreshToken, // Keep old if not provided
+        accessToken: encrypt(tokens.access_token)!,
+        refreshToken: encrypt(tokens.refresh_token || refreshToken), // Keep old if not provided
         expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
       },
     });
@@ -226,22 +265,24 @@ async function twitchApiCall(
   connection: { id: string; accessToken: string; refreshToken: string | null }
 ): Promise<{ data: any; newAccessToken?: string } | null> {
   const clientId = process.env.TWITCH_CLIENT_ID || "";
+  const decryptedAccessToken = decrypt(connection.accessToken)!;
+  const decryptedRefreshToken = decrypt(connection.refreshToken);
 
   // First attempt
   let response = await fetch(url, {
     headers: {
-      Authorization: `Bearer ${connection.accessToken}`,
+      Authorization: `Bearer ${decryptedAccessToken}`,
       "Client-Id": clientId,
     },
   });
 
   // If 401, try refreshing token and retry once
-  if (response.status === 401 && connection.refreshToken) {
+  if (response.status === 401 && decryptedRefreshToken) {
     console.log("[Twitch] Got 401, attempting token refresh...");
 
     const newToken = await refreshTwitchToken(
       connection.id,
-      connection.refreshToken
+      decryptedRefreshToken
     );
 
     if (newToken) {
@@ -374,7 +415,7 @@ export async function getUserActiveStreams(userId: string) {
 
   if (kickConnection) {
     try {
-      const token = kickConnection.accessToken;
+      const token = decrypt(kickConnection.accessToken)!;
 
       // According to Kick docs: GET /public/v1/channels with NO params returns
       // the channel info for the currently authenticated user, including stream status

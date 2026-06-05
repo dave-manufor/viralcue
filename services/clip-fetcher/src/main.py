@@ -222,7 +222,7 @@ class ClipProcessor:
         else:
             self.gcs_client = storage.Client(project=settings.gcp_project_id)
 
-    def stitch_segments(
+    async def stitch_segments(
         self,
         segment_files: list[Path],
         output_path: Path,
@@ -249,10 +249,19 @@ class ClipProcessor:
             str(output_path),
         ]
         
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        return result.returncode == 0
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await process.communicate()
+            return process.returncode == 0
+        except Exception as e:
+            logger.error("Failed to stitch segments", error=str(e))
+            return False
 
-    def _get_video_dimensions(self, video_path: Path) -> tuple[int, int]:
+    async def _get_video_dimensions(self, video_path: Path) -> tuple[int, int]:
         """Get video width and height using ffprobe."""
         cmd = [
             "ffprobe", "-v", "error",
@@ -261,23 +270,27 @@ class ClipProcessor:
             "-of", "csv=s=x:p=0",
             str(video_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            logger.error("ffprobe failed", stderr=result.stderr)
-            return (0, 0)
         try:
-            # Output may have trailing 'x' like "1280x720x", so filter out empty strings
-            parts = [p for p in result.stdout.strip().split("x") if p]
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await process.communicate()
+            if process.returncode != 0:
+                logger.error("ffprobe failed", stderr=stderr.decode())
+                return (0, 0)
+            parts = [p for p in stdout.decode().strip().split("x") if p]
             if len(parts) >= 2:
                 return (int(parts[0]), int(parts[1]))
             else:
-                logger.error("Failed to parse dimensions - unexpected format", output=result.stdout)
+                logger.error("Failed to parse dimensions - unexpected format", output=stdout.decode())
                 return (0, 0)
-        except ValueError:
-            logger.error("Failed to parse dimensions", output=result.stdout)
+        except Exception as e:
+            logger.error("Failed to parse dimensions", error=str(e))
             return (0, 0)
 
-    def transcode_to_mp4(
+    async def transcode_to_mp4(
         self,
         input_path: Path,
         output_path: Path,
@@ -292,7 +305,7 @@ class ClipProcessor:
         - Foreground: video scaled to fit width, centered
         """
         # Get source dimensions
-        src_width, src_height = self._get_video_dimensions(input_path)
+        src_width, src_height = await self._get_video_dimensions(input_path)
         if src_width == 0 or src_height == 0:
             logger.error("Could not determine video dimensions")
             return False
@@ -345,23 +358,32 @@ class ClipProcessor:
         ]
         
         logger.info("Transcoding clip to 9:16 H.264", input=str(input_path))
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        if result.returncode != 0:
-            logger.error("Transcode failed", stderr=result.stderr)
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode != 0:
+                logger.error("Transcode failed", stderr=stderr.decode())
+                return False
+            
+            file_size_mb = output_path.stat().st_size / (1024 * 1024)
+            logger.info("Transcode complete", output=str(output_path), size_mb=round(file_size_mb, 2))
+            return True
+        except Exception as e:
+            logger.error("Transcode execution error", error=str(e))
             return False
-        
-        file_size_mb = output_path.stat().st_size / (1024 * 1024)
-        logger.info("Transcode complete", output=str(output_path), size_mb=round(file_size_mb, 2))
-        return True
 
-    def upload_to_gcs(
+    def _upload_to_gcs_blocking(
         self,
         local_path: Path,
         bucket_name: str,
         blob_name: str,
     ) -> str:
-        """Upload file to GCS and return URL."""
+        """Upload file to GCS blocking implementation."""
         emulator_host = os.getenv("STORAGE_EMULATOR_HOST")
         
         logger.info("Starting GCS upload", bucket=bucket_name, blob=blob_name, file=str(local_path))
@@ -411,7 +433,21 @@ class ClipProcessor:
                 # Return standard public URL (User must make bucket public)
                 return f"https://storage.googleapis.com/{bucket_name}/{blob_name}"
 
-    def generate_thumbnail(self, video_path: Path, output_path: Path) -> bool:
+    async def upload_to_gcs(
+        self,
+        local_path: Path,
+        bucket_name: str,
+        blob_name: str,
+    ) -> str:
+        """Upload file to GCS and return URL (non-blocking)."""
+        return await asyncio.to_thread(
+            self._upload_to_gcs_blocking,
+            local_path,
+            bucket_name,
+            blob_name
+        )
+
+    async def generate_thumbnail(self, video_path: Path, output_path: Path) -> bool:
         """Generate a thumbnail from the video."""
         try:
             # Get video duration first to pick a middle frame
@@ -419,8 +455,17 @@ class ClipProcessor:
                 "ffprobe", "-v", "error", "-show_entries", "format=duration",
                 "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)
             ]
-            result = subprocess.run(probe_cmd, capture_output=True, text=True)
-            duration = float(result.stdout.strip())
+            process_probe = await asyncio.create_subprocess_exec(
+                *probe_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await process_probe.communicate()
+            if process_probe.returncode != 0:
+                logger.error("Thumbnail ffprobe failed", stderr=stderr.decode())
+                return False
+                
+            duration = float(stdout.decode().strip())
             timestamp = duration / 2
 
             cmd = [
@@ -433,10 +478,15 @@ class ClipProcessor:
             ]
             
             logger.info("Generating thumbnail", command=" ".join(cmd))
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            process_thumb = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_thumb, stderr_thumb = await process_thumb.communicate()
             
-            if result.returncode != 0:
-                logger.error("Thumbnail generation failed", stderr=result.stderr)
+            if process_thumb.returncode != 0:
+                logger.error("Thumbnail generation failed", stderr=stderr_thumb.decode())
                 return False
                 
             return True
@@ -568,19 +618,19 @@ async def process_viral_candidate(candidate: ViralCandidate) -> Optional[Process
         
         # Stitch segments (yt-dlp produces one file, so this just renames)
         stitched_path = tmp_path / "stitched.ts"
-        if not processor.stitch_segments(segments, stitched_path):
+        if not await processor.stitch_segments(segments, stitched_path):
             logger.error("Failed to stitch segments")
             return None
         
         # Transcode to MP4
         output_path = tmp_path / "final.mp4"
-        if not processor.transcode_to_mp4(stitched_path, output_path):
+        if not await processor.transcode_to_mp4(stitched_path, output_path):
             logger.error("Failed to transcode")
             return None
         
         # Upload to GCS
         blob_name = f"clips/{candidate.user_id}/{candidate.stream_id}/{candidate.session_id}.mp4"
-        gcs_url = processor.upload_to_gcs(
+        gcs_url = await processor.upload_to_gcs(
             output_path,
             settings.processed_clips_bucket,
             blob_name,
@@ -589,10 +639,10 @@ async def process_viral_candidate(candidate: ViralCandidate) -> Optional[Process
         # Generate & Upload Thumbnail
         thumbnail_url = None
         thumb_path = tmp_path / "thumb.jpg"
-        if processor.generate_thumbnail(output_path, thumb_path):
+        if await processor.generate_thumbnail(output_path, thumb_path):
             thumb_blob = f"thumbnails/{candidate.user_id}/{candidate.stream_id}/{candidate.session_id}.jpg"
             try:
-                thumbnail_url = processor.upload_to_gcs(
+                thumbnail_url = await processor.upload_to_gcs(
                     thumb_path,
                     settings.thumbnails_bucket,
                     thumb_blob

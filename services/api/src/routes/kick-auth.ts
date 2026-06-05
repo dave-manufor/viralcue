@@ -5,6 +5,7 @@ import { kickAuth } from "../lib/kick-auth";
 import { clerkAuth } from "../middleware/clerk-auth";
 import { AuthenticatedRequest } from "../middleware/clerk-auth";
 import { redis } from "../lib/redis";
+import { encrypt } from "../lib/crypto";
 
 export const kickAuthRouter: Router = Router();
 
@@ -182,16 +183,16 @@ kickAuthRouter.get("/callback", async (req, res) => {
         provider: "KICK",
         platformUserId,
         platformUsername,
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token,
+        accessToken: encrypt(tokens.access_token)!,
+        refreshToken: encrypt(tokens.refresh_token),
         expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
         scopes: tokens.scope.split(" "),
       },
       update: {
         platformUserId, // In case it changed? Unlikely
         platformUsername,
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token,
+        accessToken: encrypt(tokens.access_token)!,
+        refreshToken: encrypt(tokens.refresh_token),
         expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
         scopes: tokens.scope.split(" "),
       },

@@ -2,13 +2,20 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# Create a non-root user
+RUN useradd -m appuser && chown -R appuser:appuser /app
+
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --default-timeout=1000 -r requirements.txt
 
 # Ensure Python output is not buffered for real-time logging
 ENV PYTHONUNBUFFERED=1
 
 COPY . .
+RUN chown -R appuser:appuser /app
+
+# Use non-root user
+USER appuser
 
 # Run functions-framework on port 8080 (container port)
 # Host 0.0.0.0 is required to be accessible from outside container

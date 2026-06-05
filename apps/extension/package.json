@@ -32,9 +32,7 @@
     "permissions": [
       "cookies",
       "storage",
-      "activeTab",
-      "tabCapture",
-      "offscreen"
+      "activeTab"
     ],
     "host_permissions": [
       "$PLASMO_PUBLIC_CLERK_SYNC_HOST/*",
