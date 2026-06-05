@@ -21,6 +21,7 @@ if _emulator_host:
     os.environ["STORAGE_EMULATOR_HOST"] = _emulator_host
 
 import aiohttp
+from aiohttp import web
 import structlog
 from google.cloud import pubsub_v1, storage
 from google.auth import credentials as auth_credentials
@@ -772,7 +773,7 @@ async def handle_message(message_data: dict) -> bool:
         logger.exception("Error processing message", error=str(e))
         return False
 
-async def handle_push(request: aiohttp.web.Request) -> aiohttp.web.Response:
+async def handle_push(request: web.Request) -> web.Response:
     """Handle Pub/Sub push messages."""
     import json
     try:
@@ -783,14 +784,14 @@ async def handle_push(request: aiohttp.web.Request) -> aiohttp.web.Response:
             
             success = await handle_message(body)
             if success:
-                return aiohttp.web.Response(status=200)
+                return web.Response(status=200)
             else:
-                return aiohttp.web.Response(status=500)
+                return web.Response(status=500)
         else:
-            return aiohttp.web.Response(status=400, text="Invalid message format")
+            return web.Response(status=400, text="Invalid message format")
     except Exception as e:
         logger.exception("Error handling push message", error=str(e))
-        return aiohttp.web.Response(status=500)
+        return web.Response(status=500)
 
 async def main():
     """
@@ -888,11 +889,11 @@ async def main():
 
     # If running locally/emulator, loop forever
     if settings.pubsub_mode == "push":
-        app = aiohttp.web.Application()
+        app = web.Application()
         app.router.add_post('/pubsub/push', handle_push)
-        runner = aiohttp.web.AppRunner(app)
+        runner = web.AppRunner(app)
         await runner.setup()
-        site = aiohttp.web.TCPSite(runner, '0.0.0.0', settings.port)
+        site = web.TCPSite(runner, '0.0.0.0', settings.port)
         logger.info("Starting Clip Fetcher HTTP Push Server", port=settings.port)
         await site.start()
         
