@@ -51,6 +51,12 @@ echo "=== Deploying Services to Cloud Run ==="
 if [ -f .env ]; then
   export $(grep -v '^#' .env | xargs)
 fi
+if [ -f .env.prod ]; then
+  export $(grep -v '^#' .env.prod | xargs)
+fi
+
+# Ensure default values if not present
+INTERNAL_API_KEY=${INTERNAL_API_KEY:-internal-prod-key}
 
 # 1. API Service (Node.js) - Built via gcloud builds submit because of PNPM workspace
 echo "Deploying API Service..."
@@ -61,7 +67,7 @@ gcloud run deploy viralcue-api \
   --project $PROJECT_ID \
   --region $REGION \
   --allow-unauthenticated \
-  --set-env-vars="NODE_ENV=production,DATABASE_URL=${DATABASE_URL},DIRECT_URL=${DIRECT_URL},RAW_CLIPS_BUCKET=viralcue-raw-clips${BUCKET_SUFFIX},PROCESSED_CLIPS_BUCKET=viralcue-processed-clips${BUCKET_SUFFIX},THUMBNAILS_BUCKET=viralcue-thumbnails${BUCKET_SUFFIX}" \
+  --set-env-vars="NODE_ENV=production,DATABASE_URL=${DATABASE_URL},DIRECT_URL=${DIRECT_URL},REDIS_URL=${REDIS_URL},TOKEN_ENCRYPTION_KEY=${TOKEN_ENCRYPTION_KEY},CORS_ORIGIN=${CORS_ORIGIN},CLERK_SECRET_KEY=${CLERK_SECRET_KEY},CLERK_PUBLISHABLE_KEY=${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY},TWITCH_CLIENT_ID=${TWITCH_CLIENT_ID},TWITCH_CLIENT_SECRET=${TWITCH_CLIENT_SECRET},KICK_CLIENT_ID=${KICK_CLIENT_ID},KICK_CLIENT_SECRET=${KICK_CLIENT_SECRET},KICK_REDIRECT_URI=${KICK_REDIRECT_URI},DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY},GCP_PROJECT_ID=${PROJECT_ID},GCP_REGION=${REGION},RAW_CLIPS_BUCKET=viralcue-raw-clips${BUCKET_SUFFIX},PROCESSED_CLIPS_BUCKET=viralcue-processed-clips${BUCKET_SUFFIX},THUMBNAILS_BUCKET=viralcue-thumbnails${BUCKET_SUFFIX},USE_GCP_PUBSUB=true,YOUTUBE_CLIENT_ID=${YOUTUBE_CLIENT_ID},YOUTUBE_CLIENT_SECRET=${YOUTUBE_CLIENT_SECRET},YOUTUBE_REDIRECT_URI=${YOUTUBE_REDIRECT_URI},META_CLIENT_ID=${META_CLIENT_ID},META_CLIENT_SECRET=${META_CLIENT_SECRET},INSTAGRAM_REDIRECT_URI=${INSTAGRAM_REDIRECT_URI},TIKTOK_CLIENT_KEY=${TIKTOK_CLIENT_KEY},TIKTOK_CLIENT_SECRET=${TIKTOK_CLIENT_SECRET},TIKTOK_REDIRECT_URI=${TIKTOK_REDIRECT_URI},TWITTER_CLIENT_ID=${TWITTER_CLIENT_ID},TWITTER_CLIENT_SECRET=${TWITTER_CLIENT_SECRET},TWITTER_REDIRECT_URI=${TWITTER_REDIRECT_URI},INTERNAL_API_KEY=${INTERNAL_API_KEY}" \
   --format="value(status.url)" > api_url.txt
 API_URL=$(cat api_url.txt)
 echo "API URL: $API_URL"
@@ -73,6 +79,7 @@ gcloud run deploy publisher-webhook \
   --project $PROJECT_ID \
   --region $REGION \
   --allow-unauthenticated \
+  --set-env-vars="ENV=production,DATABASE_URL=${DATABASE_URL},REDIS_URL=${REDIS_URL},TOKEN_ENCRYPTION_KEY=${TOKEN_ENCRYPTION_KEY},TIKTOK_CLIENT_KEY=${TIKTOK_CLIENT_KEY},TIKTOK_CLIENT_SECRET=${TIKTOK_CLIENT_SECRET},YOUTUBE_CLIENT_ID=${YOUTUBE_CLIENT_ID},YOUTUBE_CLIENT_SECRET=${YOUTUBE_CLIENT_SECRET},TWITTER_CLIENT_ID=${TWITTER_CLIENT_ID},TWITTER_CLIENT_SECRET=${TWITTER_CLIENT_SECRET}" \
   --format="value(status.url)" > publisher_url.txt
 PUBLISHER_URL=$(cat publisher_url.txt)
 echo "Publisher Webhook URL: $PUBLISHER_URL"
@@ -84,7 +91,7 @@ gcloud run deploy ai-engine \
   --project $PROJECT_ID \
   --region $REGION \
   --allow-unauthenticated \
-  --set-env-vars="PUBSUB_MODE=push,USE_GCP_PUBSUB=true,API_BASE_URL=$API_URL" \
+  --set-env-vars="PUBSUB_MODE=push,USE_GCP_PUBSUB=true,API_BASE_URL=$API_URL,DATABASE_URL=${DATABASE_URL},GCP_PROJECT_ID=${PROJECT_ID},INTERNAL_API_KEY=${INTERNAL_API_KEY},LLM_PROVIDER=vertex,VERTEX_AI_LOCATION=${REGION},VERTEX_AI_MODEL=gemini-2.0-flash-exp" \
   --format="value(status.url)" > ai_engine_url.txt
 AI_ENGINE_URL=$(cat ai_engine_url.txt)
 echo "AI Engine URL: $AI_ENGINE_URL"
@@ -96,7 +103,7 @@ gcloud run deploy clip-fetcher \
   --project $PROJECT_ID \
   --region $REGION \
   --allow-unauthenticated \
-  --set-env-vars="PUBSUB_MODE=push,API_URL=$API_URL,RAW_CLIPS_BUCKET=viralcue-raw-clips${BUCKET_SUFFIX},PROCESSED_CLIPS_BUCKET=viralcue-processed-clips${BUCKET_SUFFIX},THUMBNAILS_BUCKET=viralcue-thumbnails${BUCKET_SUFFIX}" \
+  --set-env-vars="PUBSUB_MODE=push,API_URL=$API_URL,RAW_CLIPS_BUCKET=viralcue-raw-clips${BUCKET_SUFFIX},PROCESSED_CLIPS_BUCKET=viralcue-processed-clips${BUCKET_SUFFIX},THUMBNAILS_BUCKET=viralcue-thumbnails${BUCKET_SUFFIX},TWITCH_CLIENT_ID=${TWITCH_CLIENT_ID},TWITCH_CLIENT_SECRET=${TWITCH_CLIENT_SECRET},GCP_PROJECT_ID=${PROJECT_ID},INTERNAL_API_KEY=${INTERNAL_API_KEY}" \
   --format="value(status.url)" > clip_fetcher_url.txt
 CLIP_FETCHER_URL=$(cat clip_fetcher_url.txt)
 echo "Clip Fetcher URL: $CLIP_FETCHER_URL"
@@ -108,7 +115,7 @@ gcloud run deploy chat-sender \
   --project $PROJECT_ID \
   --region $REGION \
   --allow-unauthenticated \
-  --set-env-vars="PUBSUB_MODE=push" \
+  --set-env-vars="PUBSUB_MODE=push,GCP_PROJECT_ID=${PROJECT_ID},DATABASE_URL=${DATABASE_URL},TWITCH_CLIENT_ID=${TWITCH_CLIENT_ID},TWITCH_CLIENT_SECRET=${TWITCH_CLIENT_SECRET},PRODUCT_COOLDOWN_SECONDS=${PRODUCT_COOLDOWN_SECONDS:-300},STREAM_MAX_MESSAGES_PER_HOUR=${STREAM_MAX_MESSAGES_PER_HOUR:-10},DRY_RUN=${CHAT_SENDER_DRY_RUN:-false}" \
   --format="value(status.url)" > chat_sender_url.txt
 CHAT_SENDER_URL=$(cat chat_sender_url.txt)
 echo "Chat Sender URL: $CHAT_SENDER_URL"
@@ -121,6 +128,7 @@ gcloud run deploy hls-fetcher \
   --region $REGION \
   --allow-unauthenticated \
   --timeout=3600 \
+  --set-env-vars="API_URL=$API_URL,INTERNAL_API_KEY=${INTERNAL_API_KEY},TWITCH_CLIENT_ID=${TWITCH_CLIENT_ID},TWITCH_CLIENT_SECRET=${TWITCH_CLIENT_SECRET},DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY},REDIS_URL=${REDIS_URL},GCP_PROJECT_ID=${PROJECT_ID},USE_GCP_PUBSUB=true" \
   --format="value(status.url)" > hls_fetcher_url.txt
 HLS_FETCHER_URL=$(cat hls_fetcher_url.txt)
 echo "HLS Fetcher URL: $HLS_FETCHER_URL"

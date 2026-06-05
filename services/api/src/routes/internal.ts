@@ -220,7 +220,7 @@ internalRouter.get(
   async (req: Request, res: Response, next) => {
     const { userId } = req.params;
 
-    const { getUserActiveStreams } = await import("../middleware/stream-auth");
+    const { getUserActiveStreams } = await import("../middleware/stream-auth.js");
 
     try {
       const streams = await getUserActiveStreams(userId);

@@ -132,7 +132,7 @@ streamsRouter.post(
       });
 
       // Start server-side HLS audio capture
-      const { startHlsCapture } = await import("../lib/hls-jobs");
+      const { startHlsCapture } = await import("../lib/hls-jobs.js");
       const captureStarted = await startHlsCapture({
         userId,
         sessionId: session.id,
@@ -216,7 +216,7 @@ streamsRouter.post(
       });
 
       // Stop HLS capture
-      const { stopHlsCapture } = await import("../lib/hls-jobs");
+      const { stopHlsCapture } = await import("../lib/hls-jobs.js");
       await stopHlsCapture(session.id);
 
       console.log(

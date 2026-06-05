@@ -27,6 +27,9 @@ import { setupDashboardSocket } from "./websocket/dashboard";
 const app: Application = express();
 const PORT = process.env.PORT || 3001;
 
+// Enable trust proxy for Cloud Run and rate-limiting
+app.set("trust proxy", true);
+
 // Security middleware
 app.use(helmet());
 app.use(
@@ -77,12 +80,12 @@ console.log(`[Config] USE_GCP_PUBSUB = ${USE_GCP_PUBSUB}`);
 
 if (USE_GCP_PUBSUB) {
   // Use Pub/Sub consumer
-  import("./lib/pubsub-consumer").then(({ startDraftsConsumer }) => {
+  import("./lib/pubsub-consumer.js").then(({ startDraftsConsumer }) => {
     startDraftsConsumer();
   });
 } else if (process.env.ENABLE_SQS_CONSUMER === "true") {
   // Legacy SQS consumer
-  import("./lib/sqs-consumer").then(({ startDraftsConsumer }) => {
+  import("./lib/sqs-consumer.js").then(({ startDraftsConsumer }) => {
     startDraftsConsumer();
   });
 }

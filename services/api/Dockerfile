@@ -12,7 +12,6 @@ COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY packages/db/package.json ./packages/db/
 COPY packages/shared/package.json ./packages/shared/
 COPY services/api/package.json ./services/api/
-COPY services/chat-sender/package.json ./services/chat-sender/
 COPY apps/web/package.json ./apps/web/
 COPY apps/extension/package.json ./apps/extension/
 
@@ -24,7 +23,7 @@ COPY . .
 
 # Generate Prisma client and build API package
 RUN DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy" DIRECT_URL="postgresql://dummy:dummy@localhost:5432/dummy" pnpm --filter @viralcue/db exec prisma generate --schema=prisma/schema.prisma
-RUN pnpm --filter @viralcue/api build
+RUN pnpm --filter @viralcue/shared build && pnpm --filter @viralcue/db build && pnpm --filter @viralcue/api build
 
 # Expose port
 EXPOSE 3001
