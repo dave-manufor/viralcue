@@ -398,6 +398,8 @@ def create_app() -> web.Application:
 
 
 if __name__ == "__main__":
+    import os
     app = create_app()
-    logger.info("Starting HLS Fetcher on port 3003...")
-    web.run_app(app, port=3003)
+    port = int(os.getenv("PORT", 3003))
+    logger.info(f"Starting HLS Fetcher on port {port}...")
+    web.run_app(app, port=port)
